@@ -1,0 +1,162 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - environments/lab/*
+      - modules/*
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - environments/lab/*
+      - modules/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: terraform-defender-lab-secrets   # created in Pipelines > Library, see AZURE_PIPELINE.md
+  - name: workingDir
+    value: 'environments/lab'
+  - name: terraformVersion
+    value: '1.9.8'
+
+stages:
+
+  # ---------------------------------------------------------------------
+  # STAGE 1: Validate + Plan — runs on every PR and every push to main
+  # ---------------------------------------------------------------------
+  - stage: Plan
+    displayName: 'Terraform Validate & Plan'
+    jobs:
+      - job: TerraformPlan
+        displayName: 'Init, Validate, Plan'
+        steps:
+          - script: |
+              curl -fsSL -o terraform.zip https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+              unzip -o terraform.zip
+              sudo mv terraform /usr/local/bin/
+              terraform -version
+            displayName: 'Install Terraform'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: 'sc-terraform-defender-lab'   # name of the Service Connection, see AZURE_PIPELINE.md
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                cd $(workingDir)
+                export ARM_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+                terraform init -backend-config="storage_account_name=$(TF_BACKEND_STORAGE_ACCOUNT)"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Format Check'
+            inputs:
+              azureSubscription: 'sc-terraform-defender-lab'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd $(workingDir)
+                terraform fmt -check -recursive
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Validate'
+            inputs:
+              azureSubscription: 'sc-terraform-defender-lab'
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                cd $(workingDir)
+                export ARM_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+                terraform validate
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: 'sc-terraform-defender-lab'
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                cd $(workingDir)
+                export ARM_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+                export TF_VAR_subscription_id=$(AZURE_SUBSCRIPTION_ID)
+                export TF_VAR_key_vault_tenant_id=$(AZURE_TENANT_ID)
+                export TF_VAR_vm_admin_ssh_public_key="$(TF_VAR_VM_SSH_PUBLIC_KEY)"
+                export TF_VAR_sql_admin_password="$(TF_VAR_SQL_ADMIN_PASSWORD)"
+                terraform plan -out=tfplan
+                terraform show -no-color tfplan > plan.txt
+
+          - script: |
+              echo "----- PLAN SUMMARY -----"
+              tail -n 20 $(workingDir)/plan.txt
+            displayName: 'Show Plan Summary in Logs'
+
+          - publish: '$(workingDir)/tfplan'
+            artifact: tfplan
+            displayName: 'Publish Plan File'
+
+          - publish: '$(workingDir)/plan.txt'
+            artifact: plan-readable
+            displayName: 'Publish Readable Plan'
+
+  # ---------------------------------------------------------------------
+  # STAGE 2: Apply — only runs on main branch, after Plan succeeds,
+  # and pauses for manual approval via the "production" Environment
+  # ---------------------------------------------------------------------
+  - stage: Apply
+    displayName: 'Terraform Apply'
+    dependsOn: Plan
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Apply Reviewed Plan'
+        environment: 'production'   # create this in Pipelines > Environments with an approval check
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    curl -fsSL -o terraform.zip https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+                    unzip -o terraform.zip
+                    sudo mv terraform /usr/local/bin/
+                  displayName: 'Install Terraform'
+
+                - download: current
+                  artifact: tfplan
+                  displayName: 'Download Reviewed Plan'
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Init'
+                  inputs:
+                    azureSubscription: 'sc-terraform-defender-lab'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      cd $(Build.SourcesDirectory)/$(workingDir)
+                      export ARM_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+                      terraform init -backend-config="storage_account_name=$(TF_BACKEND_STORAGE_ACCOUNT)"
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    azureSubscription: 'sc-terraform-defender-lab'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      cd $(Build.SourcesDirectory)/$(workingDir)
+                      export ARM_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+                      cp $(Pipeline.Workspace)/tfplan/tfplan ./tfplan
+                      terraform apply -auto-approve tfplan

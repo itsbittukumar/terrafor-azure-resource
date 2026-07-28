@@ -1,0 +1,104 @@
+# Copy this file to terraform.tfvars and fill in the placeholders.
+# terraform.tfvars is gitignored — never commit real secrets.
+
+subscription_id         = "16fb91c7-f0fe-4be3-8e79-09cb933f7355"
+key_vault_tenant_id      = "<your-azure-ad-tenant-id>"       # run: az account show --query tenantId -o tsv
+vm_admin_ssh_public_key  = "<paste your ~/.ssh/id_rsa.pub content>"
+sql_admin_password       = "<a strong password, or set via TF_VAR_sql_admin_password env var instead>"
+
+resource_groups = {
+  "rg-defender-lab-2026" = {
+    location = "Central India"
+    tags     = { project = "defender-lab", year = "2026" }
+  }
+}
+
+virtual_networks = {
+  "asclab-vnet" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    address_space         = ["10.0.0.0/16"]
+    subnets = {
+      "asclab-subnet" = { address_prefixes = ["10.0.1.0/24"] }
+    }
+  }
+}
+
+network_security_groups = {
+  "asclab-nsg" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+  }
+}
+
+public_ips = {
+  "asclab-linux-pip" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    allocation_method     = "Static"
+  }
+}
+
+network_interfaces = {
+  "asclab-linux-nic" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    vnet_key                = "asclab-vnet"
+    subnet_key              = "asclab-subnet"
+    public_ip_key           = "asclab-linux-pip"
+    nsg_key                  = "asclab-nsg"
+  }
+}
+
+linux_vms = {
+  "asclab-linux" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    size                  = "Standard_B1s"
+    admin_username         = "azureuser"
+    nic_key                = "asclab-linux-nic"
+    os_disk_storage_type   = "Standard_LRS"
+  }
+}
+
+log_analytics_workspaces = {
+  "asclab-la-qrohsab6x3kus" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    sku                   = "PerGB2018"
+  }
+}
+
+key_vaults = {
+  "asclab-kv-qrohsab6x3kus" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    sku_name              = "standard"
+  }
+}
+
+app_services = {
+  "asclab-app-qrohsab6x3kus" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    sku_name              = "B1"
+  }
+}
+
+function_apps = {
+  "asclab-fa-qrohsab6x3kus" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    sku_name              = "Y1"
+  }
+}
+
+sql_databases = {
+  "asclab-sql-qrohsab6x3kus" = {
+    resource_group_name = "rg-defender-lab-2026"
+    location             = "Central India"
+    server_admin_login    = "sqladmin"
+    database_name          = "asclab-db"
+    sku_name                = "Basic"
+  }
+}
